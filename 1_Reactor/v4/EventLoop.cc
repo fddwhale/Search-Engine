@@ -2,6 +2,7 @@
 #include "Acceptor.h"
 #include "TcpConnection.h"
 #include <unistd.h>
+#include <sys/eventfd.h>
 
 #include <iostream>
 
@@ -14,15 +15,20 @@ EventLoop::EventLoop(Acceptor &acceptor)
 , _evtList(1024)
 , _isLooping(false)
 , _acceptor(acceptor)
+, _evtfd(createEventFd())
+, _mutex()
 {
     //将listenfd放在红黑树上进行监听
     int listenfd = _acceptor.fd();
     addEpollReadFd(listenfd);
+    //将用于通信的文件描述符进行监听
+    addEpollReadFd(_evtfd);
 }
 
 EventLoop::~EventLoop()
 {
     close(_epfd);
+    close(_evtfd);
 }
 
 //事件循环与否
@@ -79,6 +85,16 @@ void EventLoop::waitEpollFd()
                     handleNewConnection();
                 }
             }
+            //监听的用于通信的文件描述符就绪了
+            else if(fd == _evtfd)
+            {
+                if(_evtList[idx].events & EPOLLIN)
+                {
+                    handleRead();
+                    //执行所有的"任务"
+                    doPengdingFunctors();
+                }
+            }
             else//处理老的连接
             {
                 if(_evtList[idx].events & EPOLLIN)
@@ -107,7 +123,7 @@ void EventLoop::handleNewConnection()
 
     //创建新的连接
     /* shared_ptr<TcpConnection> con(new TcpConnection(connfd)); */
-    TcpConnectionPtr con(new TcpConnection(connfd));
+    TcpConnectionPtr con(new TcpConnection(connfd, this));
 
     //将三个数据成员（回调函数）传递给连接TcpConnection
     con->setNewConnectionCallback(_onNewConnectionCb);//连接建立
@@ -207,3 +223,68 @@ void EventLoop::setCloseCallback(TcpConnectionCallback &&cb)
 {
     _onCloseCb = std::move(cb);
 }
+
+int EventLoop::createEventFd()
+{
+    int fd = eventfd(10, 0);
+    if(fd < 0)
+    {
+        perror("eventfd");
+        return fd;
+    }
+
+    return fd;
+}
+
+void EventLoop::handleRead()
+{
+    uint64_t one = 1;
+    ssize_t ret = read(_evtfd, &one, sizeof(uint64_t));
+    if(ret != sizeof(uint64_t))
+    {
+        perror("read");
+        return;
+    }
+}
+
+void EventLoop::wakeup()
+{
+    uint64_t one = 1;
+    ssize_t ret = write(_evtfd, &one, sizeof(uint64_t));
+    if(ret != sizeof(uint64_t))
+    {
+        perror("read");
+        return;
+    }
+
+}
+
+void EventLoop::doPengdingFunctors()
+{
+    /* _mutex.lock(); */
+    vector<Functor> tmp;
+    {
+        lock_guard<mutex> lg(_mutex);
+        tmp.swap(_pengdings);
+    }
+
+    //将所有的任务都进行执行
+    for(auto &cb : tmp)
+    {
+        cb();//回调的执行
+    }
+}
+
+//cb就是在TcpConnection中的sendInLoop的实现中，通过
+//bind绑定的send已经msg
+void EventLoop::runInLoop(Functor &&cb)
+{
+    {
+        lock_guard<mutex> lg(_mutex);
+        _pengdings.push_back(std::move(cb));
+    }
+
+    //线程池就需要通知EventLoop执行“任务”
+    wakeup();
+}
+

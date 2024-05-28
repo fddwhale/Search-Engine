@@ -10,15 +10,18 @@
 using std::shared_ptr;
 using std::function;
 
+class EventLoop;//前向声明
+
 class TcpConnection
 : public std::enable_shared_from_this<TcpConnection>
 {
     using TcpConnectionPtr = shared_ptr<TcpConnection>;
     using TcpConnectionCallback = function<void(const TcpConnectionPtr &)>;
 public:
-    explicit TcpConnection(int fd);
+    explicit TcpConnection(int fd, EventLoop *loop);
     ~TcpConnection();
     void send(const string &msg);
+    void sendInLoop(const string &msg);
     string receive();
 
     //为了方便调试的函数
@@ -44,6 +47,7 @@ public:
 
 
 private:
+    EventLoop *_loop;
     SocketIO _sockIO;
 
     //为了调试而加入的三个数据成员

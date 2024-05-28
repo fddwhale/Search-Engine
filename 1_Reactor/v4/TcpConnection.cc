@@ -1,4 +1,5 @@
 #include "TcpConnection.h"
+#include "EventLoop.h"
 #include <iostream>
 #include <sstream>
 
@@ -6,8 +7,9 @@ using std::cout;
 using std::endl;
 using std::ostringstream;
 
-TcpConnection::TcpConnection(int fd)
-: _sockIO(fd)
+TcpConnection::TcpConnection(int fd, EventLoop *loop)
+: _loop(loop)
+, _sockIO(fd)
 , _sock(fd)
 , _localAddr(getLocalAddr())
 , _peerAddr(getPeerAddr())
@@ -23,6 +25,26 @@ TcpConnection::~TcpConnection()
 void TcpConnection::send(const string &msg)
 {
     _sockIO.writen(msg.c_str(), msg.size());
+}
+
+//在TcpConnection中，将数据msg发送给EventLoop
+//即使TcpConnection将线程池处理好之后的数据msg
+//发送给EventLoop，但是EventLoop本身是没有发送
+//数据的能力的，也就是即使拿到msg，也没有用，
+//所以在此处，需要将数据msg以及发送数据能力
+//的TcpConnection中的send函数一起打包发给
+//EventLoop在，这样EventLoop才有能力将线程池
+//处理好之后的数据发送给客户端
+void TcpConnection::sendInLoop(const string &msg)
+{
+    if(_loop)
+    {
+        //线程池给EventLoop的“任务”就是处理好之后的数据msg
+        //以及发送数据的能力send
+        //void runInLoop(function<void()> &&cb)
+        _loop->runInLoop(bind(&TcpConnection::send, this, msg));
+    }
+
 }
 
 string TcpConnection::receive()

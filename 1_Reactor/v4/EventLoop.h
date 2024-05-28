@@ -6,17 +6,21 @@
 #include <map>
 #include <memory>
 #include <functional>
+#include <mutex>
 
 using std::vector;
 using std::map;
 using std::shared_ptr;
 using std::function;
+using std::mutex;
+using std::lock_guard;
 
 class Acceptor;//前向声明
 class TcpConnection;//前向声明
 
 using TcpConnectionPtr = shared_ptr<TcpConnection>;
 using TcpConnectionCallback = function<void(const TcpConnectionPtr &)>;
+using Functor = function<void()>;
 
 class EventLoop
 {
@@ -48,6 +52,14 @@ public:
     void setMessageCallback(TcpConnectionCallback &&cb);
     void setCloseCallback(TcpConnectionCallback &&cb);
 
+public:
+    int createEventFd();
+    void handleRead();
+    void wakeup();
+    void doPengdingFunctors();
+
+    void runInLoop(Functor &&cb);
+
 private:
     int _epfd;//epoll_create创建的文件描述符
     vector<struct epoll_event> _evtList;//存放满足条件的文件描述符的结构体
@@ -58,6 +70,10 @@ private:
     TcpConnectionCallback _onNewConnectionCb;//连接建立
     TcpConnectionCallback _onCloseCb;//连接断开
     TcpConnectionCallback _onMessageCb;//消息到达（文件描述可读）
+
+    int _evtfd;//用于通信的文件描述符
+    vector<Functor> _pengdings;//存放的是所有要执行的任务
+    mutex _mutex;//对共享资源vector上锁
 
 };
 
